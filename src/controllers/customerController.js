@@ -34,8 +34,10 @@ exports.sendOtp = async (req, res) => {
       });
     }
 
-    // OTP generate
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const testMode = process.env.OTP_TEST_MODE === 'true';
+    const otp = testMode
+      ? '123456'
+      : String(Math.floor(100000 + Math.random() * 900000));
     const expires_at = new Date(Date.now() + 5 * 60 * 1000); // 5 min
 
     // Delete old unverified OTPs for this mobile
@@ -57,13 +59,16 @@ exports.sendOtp = async (req, res) => {
 
     if (error) throw error;
 
-    console.log(`📱 OTP for ${mobile}: ${otp}`);
-    console.log(`   Expires: ${expires_at.toISOString()}`);
+    if (testMode) {
+      console.log("TEST OTP: ", otp);
+    }
 
+    // TODO: Integrate Fast2SMS or MSG91 for production
     res.json({
       success: true,
       message: 'OTP sent',
-      dev_otp: process.env.NODE_ENV === 'development' ? otp : undefined,
+      ...(testMode ? { test_otp: otp } : {}),
+      dev_otp: !testMode && process.env.NODE_ENV === 'development' ? otp : undefined,
       expires_at
     });
 
