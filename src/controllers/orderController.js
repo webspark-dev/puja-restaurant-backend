@@ -162,6 +162,9 @@ exports.getOrder = async (req, res) => {
 // ============================================
 // GET LIVE ORDERS
 // ============================================
+// ============================================
+// GET LIVE ORDERS — Show ALL non-completed orders from today
+// ============================================
 exports.getLiveOrders = async (req, res) => {
   try {
     const { restaurant_id } = req.query;
@@ -172,24 +175,31 @@ exports.getLiveOrders = async (req, res) => {
 
     const today = new Date().toISOString().split('T')[0];
 
+    // ✅ Get ALL orders from today (no status filter)
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
       .eq('restaurant_id', restaurant_id)
       .gte('created_at', today + 'T00:00:00')
-      .in('status', ['awaiting_payment', 'placed', 'confirmed', 'preparing', 'ready'])
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false });
 
     if (error) throw error;
 
-    res.json({ success: true, orders: orders || [] });
+    // ✅ Filter in JS (case-insensitive)
+    const activeOrders = (orders || []).filter(o => {
+      const s = String(o.status || '').toLowerCase();
+      return !['completed', 'cancelled'].includes(s);
+    });
+
+    console.log(`📊 getLiveOrders: ${activeOrders.length} active orders for ${restaurant_id}`);
+
+    res.json({ success: true, orders: activeOrders });
 
   } catch (error) {
     console.error('getLiveOrders error:', error);
     res.status(500).json({ error: error.message });
   }
 };
-
 // ============================================
 // STEP 2: CONFIRM CASH
 // ============================================
