@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const orderController = require('../controllers/orderController');
 
-// Optional: import auth middleware if exists
+// Optional auth middleware
 let adminAuth = (req, res, next) => next();
 try {
   const authMiddleware = require('../middleware/auth');
@@ -25,5 +25,6 @@ router.get('/:orderId', orderController.getOrder);
 // ---- Admin routes ----
 router.patch('/:orderId/status', adminAuth, orderController.updateOrderStatus);
 router.patch('/:orderId/settle-cash', adminAuth, orderController.settleCash);
+router.patch('/:orderId/print-bill', adminAuth, orderController.printBill);
 
 module.exports = router;
