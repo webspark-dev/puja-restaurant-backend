@@ -165,6 +165,12 @@ exports.getOrder = async (req, res) => {
 // ============================================
 // GET LIVE ORDERS — Show ALL non-completed orders from today
 // ============================================
+// ============================================
+// GET LIVE ORDERS — Only active orders (not COMPLETED/CANCELLED)
+// ============================================
+// ============================================
+// GET LIVE ORDERS — Only active orders
+// ============================================
 exports.getLiveOrders = async (req, res) => {
   try {
     const { restaurant_id } = req.query;
@@ -175,23 +181,23 @@ exports.getLiveOrders = async (req, res) => {
 
     const today = new Date().toISOString().split('T')[0];
 
-    // ✅ Get ALL orders from today (no status filter)
+    // 🎯 Get ALL of today's orders (no DB filter — we'll filter in code)
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
       .eq('restaurant_id', restaurant_id)
       .gte('created_at', today + 'T00:00:00')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: true });
 
     if (error) throw error;
 
-    // ✅ Filter in JS (case-insensitive)
+    // 🎯 Filter out COMPLETED and CANCELLED (case-insensitive)
     const activeOrders = (orders || []).filter(o => {
-      const s = String(o.status || '').toLowerCase();
-      return !['COMPLETED', 'CANCELLED'].includes(s);
+      const s = String(o.status || '').toUpperCase();
+      return s !== 'COMPLETED' && s !== 'CANCELLED';
     });
 
-    console.log(`📊 getLiveOrders: ${activeOrders.length} active orders for ${restaurant_id}`);
+    console.log(`📊 getLiveOrders: ${activeOrders.length} active / ${orders?.length || 0} total`);
 
     res.json({ success: true, orders: activeOrders });
 
