@@ -11,12 +11,15 @@ exports.downloadBillPDF = async (req, res) => {
 
     const { data: order } = await supabase
       .from('orders')
-      .select('customer_mobile, token')
+      .select('customer_mobile, token, payment_method')
       .eq('id', orderId)
       .single();
 
     if (!order || order.customer_mobile !== customer.mobile) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (order.payment_method === 'cash') {
+      return res.status(403).json({ error: 'Cash bills are provided by restaurant staff' });
     }
 
     const pdfBuffer = await billService.generateBillPDF(orderId);
@@ -46,6 +49,9 @@ exports.getBillData = async (req, res) => {
 
     if (data.order.customer_mobile !== customer.mobile) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+    if (data.order.payment_method === 'cash') {
+      return res.status(403).json({ error: 'Cash bills are provided by restaurant staff' });
     }
 
     res.json({ success: true, ...data });

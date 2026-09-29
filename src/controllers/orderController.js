@@ -1,473 +1,312 @@
-const supabase = require('../config/database');
-const { generateToken, generateOrderNumber } = require('../services/tokenService');
+// ============================================
+// backend/controllers/orderController.js
+// Full Order Controller with Cash Settlement
+// ============================================
+
+const { createClient } = require('@supabase/supabase-js');
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
 // ============================================
-// CUSTOMER: Order Create
+// Helper: Generate Token Number
+// ============================================
+async function generateTokenNumber(restaurantId, orderType) {
+  const today = new Date().toISOString().split('T')[0];
+  const prefix = orderType === 'takeaway' ? 'T' : 'D';
+
+  const { data: existing } = await supabase
+    .from('orders')
+    .select('token_number')
+    .eq('restaurant_id', restaurantId)
+    .eq('order_type', orderType)
+    .gte('created_at', today + 'T00:00:00')
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  let nextNum = 1;
+  if (existing && existing.length > 0 && existing[0].token_number) {
+    const match = existing[0].token_number.match(/\d+/);
+    if (match) nextNum = parseInt(match[0]) + 1;
+  }
+
+  return `${prefix}${String(nextNum).padStart(3, '0')}`;
+}
+
+// ============================================
+// Helper: Generate Order Number
+// ============================================
+function generateOrderNumber() {
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const rand = String(Math.floor(Math.random() * 99999)).padStart(5, '0');
+  return `ORD-${date}-${rand}`;
+}
+
+// ============================================
+// CREATE ORDER — Customer places order
 // ============================================
 exports.createOrder = async (req, res) => {
   try {
-    const { restaurant_id, order_type, payment_method, items } = req.body;
-    const customer = req.customer;
+    const {
+      restaurant_id,
+      customer_name,
+      customer_mobile,
+      items,
+      total_amount,
+      payment_method,
+      order_type = 'dinein',
+      notes = ''
+    } = req.body;
 
-    if (!order_type || !['dinein', 'takeaway'].includes(order_type)) {
-      return res.status(400).json({ error: 'Valid order_type required' });
-    }
-    if (!payment_method || !['upi', 'cash'].includes(payment_method)) {
-      return res.status(400).json({ error: 'Valid payment_method required' });
-    }
-    if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ error: 'Items required' });
-    }
-
-    const { data: settings } = await supabase
-      .from('restaurant_settings')
-      .select('ordering_enabled, gst_percent, cash_timeout_minutes, pause_message')
-      .eq('restaurant_id', restaurant_id)
-      .single();
-
-    if (!settings?.ordering_enabled) {
-      return res.status(400).json({
-        error: 'Ordering paused',
-        message: settings?.pause_message || 'Try again later'
-      });
+    if (!restaurant_id) {
+      return res.status(400).json({ error: 'restaurant_id required' });
     }
 
-    const itemIds = items.map(i => i.menu_item_id);
-    const { data: menuItems } = await supabase
-      .from('menu_items')
-      .select('id, name, price, available')
-      .in('id', itemIds)
-      .eq('restaurant_id', restaurant_id);
-
-    if (!menuItems || menuItems.length === 0) {
-      return res.status(400).json({ error: 'Invalid items' });
+    if (!items || items.length === 0) {
+      return res.status(400).json({ error: 'No items in order' });
     }
 
-    let subtotal = 0;
-    const orderItems = [];
+    // Generate token & order number
+    const tokenNumber = await generateTokenNumber(restaurant_id, order_type);
+    const orderNumber = generateOrderNumber();
 
-    for (const item of items) {
-      const menuItem = menuItems.find(m => m.id === item.menu_item_id);
-      if (!menuItem) {
-        return res.status(400).json({ error: `Item ${item.menu_item_id} not found` });
-      }
-      if (!menuItem.available) {
-        return res.status(400).json({ error: `${menuItem.name} is not available` });
-      }
-
-      const qty = parseInt(item.quantity);
-      if (qty < 1 || qty > 50) {
-        return res.status(400).json({ error: 'Invalid quantity' });
-      }
-
-      const lineTotal = menuItem.price * qty;
-      subtotal += lineTotal;
-
-      orderItems.push({
-        menu_item_id: menuItem.id,
-        item_name: menuItem.name,
-        price: menuItem.price,
-        quantity: qty,
-        total: lineTotal,
-        variant_name: item.variant_name || null,
-        variant_price: item.variant_price || null,
-        spice_level: item.spice_level || null,
-        addons: item.addons || [],
-        addons_total: item.addons_total || 0,
-        special_note: item.special_note || null
-      });
-    }
-
-    const gst = Math.round((subtotal * (settings.gst_percent || 5)) / 100);
-    const total = subtotal + gst;
-
-    const token = await generateToken(restaurant_id, order_type);
-    const orderNumber = await generateOrderNumber(restaurant_id);
-
-    const { data: order, error: orderErr } = await supabase
+    // Insert order
+    const { data: order, error } = await supabase
       .from('orders')
-      .insert({
+      .insert([{
         restaurant_id,
         order_number: orderNumber,
-        token,
-        customer_name: customer.name,
-        customer_mobile: customer.mobile,
-        order_type,
-        subtotal,
-        gst,
-        total,
+        token_number: tokenNumber,
+        customer_name,
+        customer_mobile,
+        items,
+        total_amount,
         payment_method,
-        payment_status: 'PENDING',
-        status: 'PENDING_PAYMENT'
-      })
+        order_type,
+        notes,
+        status: 'placed',
+        is_cash_settled: false,   // 🔑 Cash trigger flag
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }])
       .select()
       .single();
 
-    if (orderErr) throw orderErr;
+    if (error) throw error;
 
-    await supabase.from('order_items').insert(
-      orderItems.map(oi => ({ ...oi, order_id: order.id }))
-    );
-
-    await supabase.from('order_status_history').insert({
-      order_id: order.id,
-      status: 'PENDING_PAYMENT',
-      note: `Order created via ${payment_method}`
-    });
-
+    // Real-time notify admin
     const io = req.app.get('io');
     if (io) {
-      io.to('admin').emit('order:new', {
-        order_id: order.id,
-        token: order.token,
-        order_number: order.order_number,
-        order_type: order.order_type,
-        payment_method: order.payment_method,
-        payment_status: order.payment_status,
-        total: order.total,
-        customer_name: customer.name,
-        customer_mobile: customer.mobile,
-        created_at: order.created_at
-      });
-
-      console.log(`🔔 WS: New order ${order.token} → admin`);
+      io.to(`restaurant_${restaurant_id}`).emit('newOrder', order);
     }
 
-    res.json({
+    res.status(201).json({
       success: true,
-      order: {
-        id: order.id,
-        order_number: order.order_number,
-        token: order.token,
-        subtotal: order.subtotal,
-        gst: order.gst,
-        total: order.total,
-        payment_method: order.payment_method,
-        payment_status: order.payment_status,
-        status: order.status,
-        order_type: order.order_type,
-        created_at: order.created_at
-      },
-      cash_timeout_minutes: settings.cash_timeout_minutes || 5
+      order,
+      token_number: tokenNumber,
+      order_number: orderNumber
     });
 
-  } catch (err) {
-    console.error('Order create error:', err);
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('createOrder error:', error);
+    res.status(500).json({ error: error.message });
   }
 };
 
 // ============================================
-// CUSTOMER: Order Details
+// GET ORDER — Customer fetches order details
 // ============================================
 exports.getOrder = async (req, res) => {
   try {
-    const { id } = req.params;
-    const customer = req.customer;
+    const { orderId } = req.params;
 
-    const { data: order } = await supabase
+    const { data: order, error } = await supabase
       .from('orders')
       .select('*')
-      .eq('id', id)
-      .eq('customer_mobile', customer.mobile)
+      .eq('id', orderId)
       .single();
 
-    if (!order) {
+    if (error || !order) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    const { data: items } = await supabase
-      .from('order_items')
-      .select('*')
-      .eq('order_id', id);
+    res.json({ success: true, order });
 
-    const { data: history } = await supabase
-      .from('order_status_history')
-      .select('*')
-      .eq('order_id', id)
-      .order('created_at');
-
-    res.json({
-      success: true,
-      order,
-      items,
-      history
-    });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('getOrder error:', error);
+    res.status(500).json({ error: error.message });
   }
 };
 
 // ============================================
-// ADMIN: Cash Confirm
+// GET LIVE ORDERS — Admin dashboard
 // ============================================
-exports.confirmCash = async (req, res) => {
+exports.getLiveOrders = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { cash_received } = req.body;
-    const user = req.user;
+    const { restaurant_id } = req.query;
 
-    console.log(`\n💰 [confirmCash] orderId=${id}, received=${cash_received}`);
+    if (!restaurant_id) {
+      return res.status(400).json({ error: 'restaurant_id required' });
+    }
 
-    const { data: order } = await supabase
+    const today = new Date().toISOString().split('T')[0];
+
+    const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
-      .eq('id', id)
+      .eq('restaurant_id', restaurant_id)
+      .gte('created_at', today + 'T00:00:00')
+      .in('status', ['placed', 'confirmed', 'preparing', 'ready'])
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    res.json({ success: true, orders: orders || [] });
+
+  } catch (error) {
+    console.error('getLiveOrders error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ============================================
+// 🚨 NEW: SETTLE CASH — Admin marks cash + bill printed
+// ============================================
+exports.settleCash = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+
+    // Fetch order
+    const { data: order, error: fetchError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
       .single();
 
-    if (!order) return res.status(404).json({ error: 'Order not found' });
+    if (fetchError || !order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Validate: only cash orders
     if (order.payment_method !== 'cash') {
-      return res.status(400).json({ error: 'Not a cash order' });
-    }
-    if (order.payment_status === 'PAID') {
-      return res.status(400).json({ error: 'Already paid' });
-    }
-    if (order.status === 'CANCELLED') {
-      return res.status(400).json({ error: 'Order cancelled (timeout)' });
-    }
-
-    const orderTotal = parseFloat(order.total);
-    const received = cash_received ? parseFloat(cash_received) : orderTotal;
-
-    if (received < orderTotal) {
       return res.status(400).json({
-        error: 'Cash received is less than total',
-        total: orderTotal,
-        received: received,
-        short: (orderTotal - received).toFixed(2)
+        error: 'This endpoint is only for cash payments'
       });
     }
 
-    const change = received - orderTotal;
+    // Validate: not already settled
+    if (order.is_cash_settled) {
+      return res.status(400).json({
+        error: 'Cash already settled for this order'
+      });
+    }
 
-    const { data: cashierUser } = await supabase
-      .from('users')
-      .select('name')
-      .eq('id', user.id)
-      .single();
-
-    const billNo = 'INV-' + Date.now().toString().slice(-5);
-
-    const { data: updated, error: updateErr } = await supabase
+    // Update: mark settled + move to preparing
+    const { data: updated, error: updateError } = await supabase
       .from('orders')
       .update({
-        payment_status: 'PAID',
-        status: 'CONFIRMED',
-        cash_received: received,
-        change_returned: change,
-        cashier_name: cashierUser?.name || 'Admin',
-        bill_no: billNo,
+        is_cash_settled: true,
+        status: 'preparing',
+        cash_settled_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
-      .eq('id', id)
-      .select();
+      .eq('id', orderId)
+      .select()
+      .single();
 
-    if (updateErr) throw updateErr;
-    if (!updated || updated.length === 0) {
-      return res.status(404).json({ error: 'Update failed' });
-    }
+    if (updateError) throw updateError;
 
-    await supabase.from('payments').insert({
-      order_id: id,
-      gateway: 'cash',
-      amount: order.total,
-      status: 'SUCCESS',
-      webhook_verified: true
-    });
-
-    await supabase.from('order_status_history').insert({
-      order_id: id,
-      status: 'CONFIRMED',
-      note: `Cash received: Rs.${received.toFixed(2)}, Change: Rs.${change.toFixed(2)}`,
-      changed_by: user.id
-    });
-
+    // Real-time notify customer
     const io = req.app.get('io');
     if (io) {
-      io.to(`order:${id}`).emit('order:confirmed', {
-        order_id: id,
-        token: order.token,
-        bill_no: billNo,
-        status: 'CONFIRMED',
-        payment_status: 'PAID',
-        cash_received: received,
-        change_returned: change,
-        timestamp: new Date().toISOString()
+      io.to(`order_${orderId}`).emit('orderUpdate', {
+        orderId,
+        status: 'preparing',
+        is_cash_settled: true,
+        updated_at: updated.updated_at,
+        message: 'Payment received. Your food is being prepared!'
       });
-
-      io.to('admin').emit('order:confirmed', {
-        order_id: id,
-        token: order.token,
-        status: 'CONFIRMED'
-      });
-
-      console.log(`🔔 WS: Cash confirmed ${order.token}`);
     }
 
     res.json({
       success: true,
-      token: order.token,
-      bill_no: billNo,
-      total: orderTotal.toFixed(2),
-      cash_received: received.toFixed(2),
-      change_returned: change.toFixed(2),
-      cashier_name: cashierUser?.name || 'Admin',
-      message: 'Cash payment confirmed'
+      message: 'Cash settled. Kitchen notified.',
+      order: updated
     });
 
-  } catch (err) {
-    console.error('Cash confirm error:', err);
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('settleCash error:', error);
+    res.status(500).json({ error: error.message });
   }
 };
 
 // ============================================
-// ADMIN: Update Status
+// UPDATE ORDER STATUS — with cash validation
 // ============================================
-exports.updateStatus = async (req, res) => {
+exports.updateOrderStatus = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { status, note } = req.body;
-    const user = req.user;
+    const { orderId } = req.params;
+    const { status } = req.body;
 
-    console.log(`\n🔄 [updateStatus] orderId=${id}, status=${status}`);
-
-    const validStatuses = ['PREPARING', 'READY', 'COMPLETED'];
+    // Validate status
+    const validStatuses = ['placed', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
 
-    const { data: order, error: fetchErr } = await supabase
+    // Fetch order
+    const { data: order, error: fetchError } = await supabase
       .from('orders')
-      .select('id, payment_status, token, status')
-      .eq('id', id)
+      .select('*')
+      .eq('id', orderId)
       .single();
 
-    if (fetchErr || !order) {
+    if (fetchError || !order) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    if (order.payment_status !== 'PAID') {
+    // 🚨 CASH VALIDATION: Must settle cash before preparing
+    if (
+      order.payment_method === 'cash' &&
+      !order.is_cash_settled &&
+      ['preparing', 'ready', 'completed'].includes(status)
+    ) {
       return res.status(400).json({
-        error: 'Payment not confirmed yet',
-        message: 'Cannot update kitchen status before payment'
+        error: 'Cash not settled. Please confirm cash received & print bill first.',
+        code: 'CASH_NOT_SETTLED'
       });
     }
 
-    const flow = { CONFIRMED: 0, PREPARING: 1, READY: 2, COMPLETED: 3 };
-    const currentIdx = flow[order.status] ?? -1;
-    const newIdx = flow[status];
-
-    if (newIdx < currentIdx) {
-      return res.status(400).json({
-        error: 'Invalid transition',
-        message: `Cannot revert from ${order.status} to ${status}`
-      });
-    }
-
-    const { data: updated, error: updateErr } = await supabase
+    // Update status
+    const { data: updated, error: updateError } = await supabase
       .from('orders')
       .update({
         status,
         updated_at: new Date().toISOString()
       })
-      .eq('id', id)
-      .select();
+      .eq('id', orderId)
+      .select()
+      .single();
 
-    if (updateErr) throw updateErr;
-    if (!updated || updated.length === 0) {
-      return res.status(404).json({ error: 'Update failed — no rows affected' });
-    }
+    if (updateError) throw updateError;
 
-    console.log(`✅ Updated: ${order.status} → ${status}`);
-
-    await supabase.from('order_status_history').insert({
-      order_id: id,
-      status,
-      note: note || `Status: ${status}`,
-      changed_by: user.id
-    });
-
+    // Real-time notify
     const io = req.app.get('io');
     if (io) {
-      io.to(`order:${id}`).emit('order:status', {
-        order_id: id,
+      io.to(`order_${orderId}`).emit('orderUpdate', {
+        orderId,
         status,
-        note,
-        token: order.token,
-        timestamp: new Date().toISOString()
-      });
-
-      io.to('admin').emit('order:status', {
-        order_id: id,
-        token: order.token,
-        status
+        updated_at: updated.updated_at
       });
     }
 
-    res.json({
-      success: true,
-      order_id: id,
-      token: order.token,
-      old_status: order.status,
-      new_status: status
-    });
+    res.json({ success: true, order: updated });
 
-  } catch (err) {
-    console.error('❌ Status update error:', err);
-    res.status(500).json({ error: err.message });
-  }
-};
-
-// ============================================
-// ADMIN: Live Orders (with Cash Pending)
-// ============================================
-exports.getLiveOrders = async (req, res) => {
-  try {
-    const { restaurant_id } = req.user;
-
-    const { data: orders } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('restaurant_id', restaurant_id)
-      .in('status', ['PENDING_PAYMENT', 'CONFIRMED', 'PREPARING', 'READY'])
-      .order('created_at', { ascending: false });
-
-    // Separate: only cash PENDING_PAYMENT (exclude UPI PENDING)
-    const filtered = (orders || []).filter(o => {
-      if (o.status === 'PENDING_PAYMENT') {
-        return o.payment_method === 'cash' && o.payment_status === 'PENDING';
-      }
-      return true;
-    });
-
-    res.json({ success: true, orders: filtered });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-};
-
-// ============================================
-// ADMIN: Cash Pending Only
-// ============================================
-exports.getCashPending = async (req, res) => {
-  try {
-    const { restaurant_id } = req.user;
-
-    const { data: orders } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('restaurant_id', restaurant_id)
-      .eq('payment_method', 'cash')
-      .eq('payment_status', 'PENDING')
-      .eq('status', 'PENDING_PAYMENT')
-      .order('created_at', { ascending: false });
-
-    res.json({ success: true, orders: orders || [] });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (error) {
+    console.error('updateOrderStatus error:', error);
+    res.status(500).json({ error: error.message });
   }
 };

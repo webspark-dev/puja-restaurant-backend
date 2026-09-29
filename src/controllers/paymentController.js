@@ -2,6 +2,22 @@ const supabase = require('../config/database');
 const phonePe = require('../services/phonePeService');
 const billService = require('../services/billService');
 
+async function getPublicBillAccessError(orderId) {
+  const { data: order, error } = await supabase
+    .from('orders')
+    .select('payment_method')
+    .eq('id', orderId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!order) return { status: 404, message: 'Order not found' };
+  if (order.payment_method === 'cash') {
+    return { status: 403, message: 'Cash bills are provided by restaurant staff' };
+  }
+
+  return null;
+}
+
 // ============================================
 // UPI Payment Initiate
 // ============================================
@@ -236,6 +252,9 @@ exports.publicBillView = async (req, res) => {
     const { orderId } = req.query;
     if (!orderId) return res.status(400).send('orderId required');
 
+    const accessError = await getPublicBillAccessError(orderId);
+    if (accessError) return res.status(accessError.status).send(accessError.message);
+
     const html = await billService.generateBillHTML(orderId);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
@@ -253,6 +272,9 @@ exports.publicBillPDF = async (req, res) => {
   try {
     const { orderId } = req.query;
     if (!orderId) return res.status(400).json({ error: 'orderId required' });
+
+    const accessError = await getPublicBillAccessError(orderId);
+    if (accessError) return res.status(accessError.status).json({ error: accessError.message });
 
     const pdfBuffer = await billService.generateBillPDF(orderId);
 

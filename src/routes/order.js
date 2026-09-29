@@ -1,39 +1,29 @@
-const router = require('express').Router();
+// ============================================
+// backend/routes/order.js
+// ============================================
+
+const express = require('express');
+const router = express.Router();
 const orderController = require('../controllers/orderController');
-const { authenticateCustomer } = require('../middleware/customerAuth');
-const { authenticate, authorize } = require('../middleware/auth');
 
-// ============================================
-// CUSTOMER ROUTES
-// ============================================
-router.post('/', authenticateCustomer, orderController.createOrder);
-router.get('/:id', authenticateCustomer, orderController.getOrder);
+// Optional: import auth middleware if exists
+let adminAuth = (req, res, next) => next();
+try {
+  const authMiddleware = require('../middleware/auth');
+  if (authMiddleware && authMiddleware.adminAuth) {
+    adminAuth = authMiddleware.adminAuth;
+  }
+} catch (e) {
+  console.warn('adminAuth middleware not found, using passthrough');
+}
 
-// ============================================
-// ADMIN ROUTES
-// ============================================
-router.post('/:id/confirm-cash',
-  authenticate,
-  authorize('owner', 'manager', 'cashier'),
-  orderController.confirmCash
-);
+// ---- Customer routes ----
+router.post('/', orderController.createOrder);
+router.get('/live', orderController.getLiveOrders);
+router.get('/:orderId', orderController.getOrder);
 
-router.patch('/:id/status',
-  authenticate,
-  authorize('owner', 'manager', 'kitchen'),
-  orderController.updateStatus
-);
-
-router.get('/admin/live',
-  authenticate,
-  authorize('owner', 'manager'),
-  orderController.getLiveOrders
-);
-
-router.get('/admin/cash-pending',
-  authenticate,
-  authorize('owner', 'manager', 'cashier'),
-  orderController.getCashPending
-);
+// ---- Admin routes ----
+router.patch('/:orderId/status', adminAuth, orderController.updateOrderStatus);
+router.patch('/:orderId/settle-cash', adminAuth, orderController.settleCash);
 
 module.exports = router;
