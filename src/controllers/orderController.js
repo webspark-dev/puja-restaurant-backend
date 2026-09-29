@@ -1,6 +1,6 @@
 // ============================================
 // backend/controllers/orderController.js
-// 2-Step Cash Flow: Confirm Cash → Print Bill → Tracking ON
+// Column names: restaurantId, token, subtotal, gst, total
 // ============================================
 
 const { createClient } = require('@supabase/supabase-js');
@@ -11,24 +11,24 @@ const supabase = createClient(
 );
 
 // ============================================
-// Helper: Generate Token Number
+// Helper: Generate Token
 // ============================================
-async function generateTokenNumber(restaurantId, orderType) {
+async function generateToken(restaurantId, orderType) {
   const today = new Date().toISOString().split('T')[0];
   const prefix = orderType === 'takeaway' ? 'T' : 'D';
 
   const { data: existing } = await supabase
     .from('orders')
-    .select('token_number')
-    .eq('restaurant_id', restaurantId)
+    .select('token')
+    .eq('restaurantId', restaurantId)
     .eq('order_type', orderType)
     .gte('created_at', today + 'T00:00:00')
     .order('created_at', { ascending: false })
     .limit(1);
 
   let nextNum = 1;
-  if (existing && existing.length > 0 && existing[0].token_number) {
-    const match = existing[0].token_number.match(/\d+/);
+  if (existing && existing.length > 0 && existing[0].token) {
+    const match = existing[0].token.match(/\d+/);
     if (match) nextNum = parseInt(match[0]) + 1;
   }
 
@@ -46,8 +46,7 @@ function generateOrderNumber() {
 }
 
 // ============================================
-// CREATE ORDER — Customer places order
-// Cash: is_cash_settled=false, tracking_enabled=false
+// CREATE ORDER
 // ============================================
 exports.createOrder = async (req, res) => {
   try {
@@ -78,21 +77,27 @@ exports.createOrder = async (req, res) => {
       });
     }
 
-    const tokenNumber = await generateTokenNumber(restaurant_id, order_type);
+    const token = await generateToken(restaurant_id, order_type);
     const orderNumber = generateOrderNumber();
-
     const isOnline = payment_method !== 'cash';
+
+    // Compute amounts
+    const subtotal = Number(total_amount);
+    const gst = Number((subtotal * 0.05).toFixed(2)); // 5% GST
+    const total = Number((subtotal + gst).toFixed(2));
 
     const { data: order, error } = await supabase
       .from('orders')
       .insert([{
-        restaurant_id,
+        restaurantId: restaurant_id,      // ✅ camelCase
         order_number: orderNumber,
-        token_number: tokenNumber,
+        token: token,                      // ✅ token (token_number নয়)
         customer_name,
         customer_mobile,
         items,
-        total_amount,
+        subtotal,                          // ✅
+        gst,                               // ✅
+        total,                             // ✅ total_amount নয়
         payment_method,
         order_type,
         notes,
@@ -115,7 +120,7 @@ exports.createOrder = async (req, res) => {
     res.status(201).json({
       success: true,
       order,
-      token_number: tokenNumber,
+      token: token,
       order_number: orderNumber
     });
 
@@ -126,7 +131,7 @@ exports.createOrder = async (req, res) => {
 };
 
 // ============================================
-// GET ORDER — Customer views order
+// GET ORDER
 // ============================================
 exports.getOrder = async (req, res) => {
   try {
@@ -155,7 +160,7 @@ exports.getOrder = async (req, res) => {
 };
 
 // ============================================
-// GET LIVE ORDERS — Admin dashboard
+// GET LIVE ORDERS
 // ============================================
 exports.getLiveOrders = async (req, res) => {
   try {
@@ -170,7 +175,7 @@ exports.getLiveOrders = async (req, res) => {
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
-      .eq('restaurant_id', restaurant_id)
+      .eq('restaurantId', restaurant_id)
       .gte('created_at', today + 'T00:00:00')
       .in('status', ['awaiting_payment', 'placed', 'confirmed', 'preparing', 'ready'])
       .order('created_at', { ascending: true });
@@ -186,8 +191,7 @@ exports.getLiveOrders = async (req, res) => {
 };
 
 // ============================================
-// 🚨 STEP 2: CONFIRM CASH — Admin received cash
-// Effects: is_cash_settled=true, status='placed' (tracking off)
+// STEP 2: CONFIRM CASH
 // ============================================
 exports.settleCash = async (req, res) => {
   try {
@@ -231,13 +235,13 @@ exports.settleCash = async (req, res) => {
         orderId,
         is_cash_settled: true,
         status: 'placed',
-        message: 'Payment confirmed. Waiting for bill print.'
+        message: 'Payment confirmed.'
       });
     }
 
     res.json({
       success: true,
-      message: 'Cash confirmed. Token generated.',
+      message: 'Cash confirmed.',
       order: updated
     });
 
@@ -248,7 +252,7 @@ exports.settleCash = async (req, res) => {
 };
 
 // ============================================
-// 🚨 STEP 3: PRINT BILL — Admin prints bill → tracking ON
+// STEP 3: PRINT BILL → Tracking ON
 // ============================================
 exports.printBill = async (req, res) => {
   try {
@@ -299,7 +303,7 @@ exports.printBill = async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Bill printed. Tracking enabled.',
+      message: 'Bill printed.',
       order: updated
     });
 
@@ -310,7 +314,7 @@ exports.printBill = async (req, res) => {
 };
 
 // ============================================
-// UPDATE STATUS — with cash validation
+// UPDATE STATUS
 // ============================================
 exports.updateOrderStatus = async (req, res) => {
   try {
@@ -332,7 +336,6 @@ exports.updateOrderStatus = async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Cash: bill print না হলে lock
     if (
       order.payment_method === 'cash' &&
       !order.tracking_enabled &&
@@ -373,6 +376,10 @@ exports.updateOrderStatus = async (req, res) => {
   }
 };
 
+// Aliases
+exports.confirmCash = async (req, res) => exports.settleCash(req, res);
+exports.updateStatus = async (req, res) => exports.updateOrderStatus(req, res);
+
 // ============================================
 // GET CASH PENDING
 // ============================================
@@ -387,7 +394,7 @@ exports.getCashPending = async (req, res) => {
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
-      .eq('restaurant_id', restaurant_id)
+      .eq('restaurantId', restaurant_id)
       .eq('payment_method', 'cash')
       .eq('is_cash_settled', false)
       .gte('created_at', today + 'T00:00:00')
@@ -400,7 +407,3 @@ exports.getCashPending = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-
-// Aliases
-exports.confirmCash = async (req, res) => exports.settleCash(req, res);
-exports.updateStatus = async (req, res) => exports.updateOrderStatus(req, res);
