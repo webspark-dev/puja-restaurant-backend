@@ -101,7 +101,7 @@ exports.createOrder = async (req, res) => {
         payment_method,
         order_type,
         notes,
-        status: isOnline ? 'placed' : 'awaiting_payment',
+        status: isOnline ? 'CONFIRMED' : 'PENDING_PAYMENT',
         is_cash_settled: isOnline ? true : false,
         tracking_enabled: isOnline ? true : false,
         created_at: new Date().toISOString(),
@@ -188,7 +188,7 @@ exports.getLiveOrders = async (req, res) => {
     // ✅ Filter in JS (case-insensitive)
     const activeOrders = (orders || []).filter(o => {
       const s = String(o.status || '').toLowerCase();
-      return !['completed', 'cancelled'].includes(s);
+      return !['COMPLETED', 'CANCELLED'].includes(s);
     });
 
     console.log(`📊 getLiveOrders: ${activeOrders.length} active orders for ${restaurant_id}`);
@@ -229,7 +229,7 @@ exports.settleCash = async (req, res) => {
       .from('orders')
       .update({
         is_cash_settled: true,
-        status: 'placed',
+        status: 'CONFIRMED',
         cash_settled_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
@@ -244,7 +244,7 @@ exports.settleCash = async (req, res) => {
       io.to(`order_${orderId}`).emit('orderUpdate', {
         orderId,
         is_cash_settled: true,
-        status: 'placed',
+        status: 'CONFIRMED',
         message: 'Payment confirmed.'
       });
     }
@@ -331,7 +331,7 @@ exports.updateOrderStatus = async (req, res) => {
     const { orderId } = req.params;
     const { status } = req.body;
 
-    const validStatuses = ['placed', 'confirmed', 'preparing', 'ready', 'completed', 'cancelled'];
+    const validStatuses = ['CONFIRMED', 'CONFIRMED', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED'];
     if (!validStatuses.includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
@@ -349,7 +349,7 @@ exports.updateOrderStatus = async (req, res) => {
     if (
       order.payment_method === 'cash' &&
       !order.tracking_enabled &&
-      ['preparing', 'ready', 'completed'].includes(status)
+      ['PREPARING', 'READY', 'COMPLETED'].includes(status)
     ) {
       return res.status(400).json({
         error: 'Print bill first',
