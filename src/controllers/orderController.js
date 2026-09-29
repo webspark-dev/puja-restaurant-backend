@@ -1,6 +1,6 @@
 // ============================================
 // backend/controllers/orderController.js
-// Column names: restaurantId, token, subtotal, gst, total
+// Column names: restaurant_id, token, subtotal, gst, total
 // ============================================
 
 const { createClient } = require('@supabase/supabase-js');
@@ -13,14 +13,14 @@ const supabase = createClient(
 // ============================================
 // Helper: Generate Token
 // ============================================
-async function generateToken(restaurantId, orderType) {
+async function generateToken(restaurant_id, orderType) {
   const today = new Date().toISOString().split('T')[0];
   const prefix = orderType === 'takeaway' ? 'T' : 'D';
 
   const { data: existing } = await supabase
     .from('orders')
     .select('token')
-    .eq('restaurantId', restaurantId)
+    .eq('restaurant_id', restaurant_id)
     .eq('order_type', orderType)
     .gte('created_at', today + 'T00:00:00')
     .order('created_at', { ascending: false })
@@ -89,7 +89,7 @@ exports.createOrder = async (req, res) => {
     const { data: order, error } = await supabase
       .from('orders')
       .insert([{
-        restaurantId: restaurant_id,      // ✅ camelCase
+        restaurant_id: restaurant_id,      // ✅ camelCase
         order_number: orderNumber,
         token: token,                      // ✅ token (token_number নয়)
         customer_name,
@@ -175,7 +175,7 @@ exports.getLiveOrders = async (req, res) => {
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
-      .eq('restaurantId', restaurant_id)
+      .eq('restaurant_id', restaurant_id)
       .gte('created_at', today + 'T00:00:00')
       .in('status', ['awaiting_payment', 'placed', 'confirmed', 'preparing', 'ready'])
       .order('created_at', { ascending: true });
@@ -394,7 +394,7 @@ exports.getCashPending = async (req, res) => {
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
-      .eq('restaurantId', restaurant_id)
+      .eq('restaurant_id', restaurant_id)
       .eq('payment_method', 'cash')
       .eq('is_cash_settled', false)
       .gte('created_at', today + 'T00:00:00')
