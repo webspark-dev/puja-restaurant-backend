@@ -19,6 +19,7 @@ try {
 
 // ---- Customer routes ----
 router.post('/', orderController.createOrder);
+router.get('/customer-history', orderController.getCustomerHistory);
 router.get('/live', orderController.getLiveOrders);
 router.get('/:orderId', orderController.getOrder);
 

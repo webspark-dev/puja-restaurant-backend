@@ -326,16 +326,35 @@ exports.printBill = async (req, res) => {
 // ============================================
 // UPDATE STATUS
 // ============================================
+// ============================================
+// UPDATE STATUS — Accepts UPPERCASE & lowercase
+// ============================================
 exports.updateOrderStatus = async (req, res) => {
   try {
     const { orderId } = req.params;
-    const { status } = req.body;
+    const { status, note } = req.body;
 
-    const validStatuses = ['CONFIRMED', 'CONFIRMED', 'PREPARING', 'READY', 'COMPLETED', 'CANCELLED'];
-    if (!validStatuses.includes(status)) {
-      return res.status(400).json({ error: 'Invalid status' });
+    // ✅ Normalize to UPPERCASE
+    const normalizedStatus = String(status || '').toUpperCase();
+
+    const validStatuses = [
+      'PENDING_PAYMENT',
+      'PLACED',
+      'CONFIRMED',
+      'PREPARING',
+      'READY',
+      'COMPLETED',
+      'CANCELLED'
+    ];
+
+    if (!validStatuses.includes(normalizedStatus)) {
+      return res.status(400).json({
+        error: `Invalid status: ${status}`,
+        allowed: validStatuses
+      });
     }
 
+    // Fetch order
     const { data: order, error: fetchError } = await supabase
       .from('orders')
       .select('*')
@@ -346,10 +365,11 @@ exports.updateOrderStatus = async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
+    // 🚨 Cash: Bill print না হলে status change নয়
     if (
       order.payment_method === 'cash' &&
       !order.tracking_enabled &&
-      ['PREPARING', 'READY', 'COMPLETED'].includes(status)
+      ['PREPARING', 'READY', 'COMPLETED'].includes(normalizedStatus)
     ) {
       return res.status(400).json({
         error: 'Print bill first',
@@ -357,10 +377,11 @@ exports.updateOrderStatus = async (req, res) => {
       });
     }
 
+    // Update
     const { data: updated, error: updateError } = await supabase
       .from('orders')
       .update({
-        status,
+        status: normalizedStatus,
         updated_at: new Date().toISOString()
       })
       .eq('id', orderId)
@@ -369,12 +390,14 @@ exports.updateOrderStatus = async (req, res) => {
 
     if (updateError) throw updateError;
 
+    // Real-time notify
     const io = req.app.get('io');
     if (io) {
       io.to(`order_${orderId}`).emit('orderUpdate', {
         orderId,
-        status,
-        updated_at: updated.updated_at
+        status: normalizedStatus,
+        updated_at: updated.updated_at,
+        note: note || null
       });
     }
 
@@ -385,35 +408,64 @@ exports.updateOrderStatus = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-
-// Aliases
-exports.confirmCash = async (req, res) => exports.settleCash(req, res);
-exports.updateStatus = async (req, res) => exports.updateOrderStatus(req, res);
-
 // ============================================
-// GET CASH PENDING
+// GET CUSTOMER HISTORY — Customer's own orders
 // ============================================
-exports.getCashPending = async (req, res) => {
+exports.getCustomerHistory = async (req, res) => {
   try {
-    const { restaurant_id } = req.query;
+    const { mobile, restaurant_id, limit = 20 } = req.query;
+
+    if (!mobile) {
+      return res.status(400).json({ error: 'mobile required' });
+    }
+
     if (!restaurant_id) {
       return res.status(400).json({ error: 'restaurant_id required' });
     }
 
-    const today = new Date().toISOString().split('T')[0];
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
       .eq('restaurant_id', restaurant_id)
-      .eq('payment_method', 'cash')
-      .eq('is_cash_settled', false)
-      .gte('created_at', today + 'T00:00:00')
-      .order('created_at', { ascending: true });
+      .eq('customer_mobile', mobile)
+      .order('created_at', { ascending: false })
+      .limit(parseInt(limit));
 
     if (error) throw error;
+
     res.json({ success: true, orders: orders || [] });
   } catch (error) {
-    console.error('getCashPending error:', error);
+    console.error('getCustomerHistory error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+// ============================================
+// GET CUSTOMER HISTORY — Customer's own orders
+// ============================================
+exports.getCustomerHistory = async (req, res) => {
+  try {
+    const { mobile, restaurant_id, limit = 20 } = req.query;
+
+    if (!mobile) {
+      return res.status(400).json({ error: 'mobile required' });
+    }
+    if (!restaurant_id) {
+      return res.status(400).json({ error: 'restaurant_id required' });
+    }
+
+    const { data: orders, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('restaurant_id', restaurant_id)
+      .eq('customer_mobile', mobile)
+      .order('created_at', { ascending: false })
+      .limit(parseInt(limit));
+
+    if (error) throw error;
+
+    res.json({ success: true, orders: orders || [] });
+  } catch (error) {
+    console.error('getCustomerHistory error:', error);
     res.status(500).json({ error: error.message });
   }
 };
