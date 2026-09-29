@@ -1,7 +1,14 @@
+// ============================================
+// backend/src/controllers/paymentController.js
+// ============================================
+
 const supabase = require('../config/database');
 const phonePe = require('../services/phonePeService');
 const billService = require('../services/billService');
 
+// ============================================
+// Helper: Get Public Bill Access Error
+// ============================================
 async function getPublicBillAccessError(orderId) {
   const { data: order, error } = await supabase
     .from('orders')
@@ -98,6 +105,8 @@ async function onPaymentSuccess(orderNumber, paymentId, io) {
       status: 'CONFIRMED',
       bill_no: billNo,
       bill_pdf_url: billPdfUrl,
+      is_cash_settled: true,
+      tracking_enabled: true,
       updated_at: new Date().toISOString()
     })
     .eq('id', order.id);
@@ -236,12 +245,95 @@ exports.mockConfirm = async (req, res) => {
 };
 
 // ============================================
+// 🆕 MOCK SUCCESS — Direct payment success (dev/sandbox)
+// ============================================
+exports.mockSuccess = async (req, res) => {
+  try {
+    const { order_id } = req.body;
+
+    if (!order_id) {
+      return res.status(400).json({ error: 'order_id required' });
+    }
+
+    const { data: order, error: fetchError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', order_id)
+      .single();
+
+    if (fetchError || !order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const billNo = order.bill_no || 'INV-' + Date.now().toString().slice(-5);
+    const billPdfUrl = `/api/payment/bill-public?orderId=${order.id}`;
+
+    const { data: updated, error: updateError } = await supabase
+      .from('orders')
+      .update({
+        payment_status: 'PAID',
+        payment_id: `MOCK-${Date.now()}`,
+        status: 'CONFIRMED',
+        bill_no: billNo,
+        bill_pdf_url: billPdfUrl,
+        is_cash_settled: true,
+        tracking_enabled: true,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', order_id)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    // Add to status history
+    await supabase.from('order_status_history').insert({
+      order_id: order.id,
+      status: 'CONFIRMED',
+      note: 'Mock payment auto-verified'
+    });
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`order_${order_id}`).emit('orderUpdate', {
+        orderId: order_id,
+        status: 'CONFIRMED',
+        payment_status: 'PAID',
+        message: 'Payment successful!'
+      });
+
+      io.to('admin').emit('order:confirmed', {
+        order_id: order.id,
+        token: order.token,
+        bill_no: billNo,
+        payment_method: 'UPI',
+        payment_status: 'PAID',
+        status: 'CONFIRMED',
+        total: order.total
+      });
+    }
+
+    console.log(`✅ Mock payment success: ${order.token}`);
+
+    res.json({
+      success: true,
+      message: 'Mock payment successful',
+      order: updated,
+      bill_no: billNo
+    });
+  } catch (error) {
+    console.error('mockSuccess error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// ============================================
 // Legacy Success Page (Backend Direct URL)
 // ============================================
 exports.successPage = async (req, res) => {
   const { orderId, token, bill } = req.query;
-  // Redirect to frontend instead
-  res.redirect(`http://localhost:5173/success?orderId=${orderId}&token=${token}&bill=${bill}`);
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  res.redirect(`${frontendUrl}/success?orderId=${orderId}&token=${token}&bill=${bill}`);
 };
 
 // ============================================
