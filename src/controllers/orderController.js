@@ -171,6 +171,9 @@ exports.getOrder = async (req, res) => {
 // ============================================
 // GET LIVE ORDERS — Only active orders
 // ============================================
+// ============================================
+// GET LIVE ORDERS — Only active orders
+// ============================================
 exports.getLiveOrders = async (req, res) => {
   try {
     const { restaurant_id } = req.query;
@@ -181,7 +184,6 @@ exports.getLiveOrders = async (req, res) => {
 
     const today = new Date().toISOString().split('T')[0];
 
-    // 🎯 Get ALL of today's orders (no DB filter — we'll filter in code)
     const { data: orders, error } = await supabase
       .from('orders')
       .select('*')
@@ -191,7 +193,7 @@ exports.getLiveOrders = async (req, res) => {
 
     if (error) throw error;
 
-    // 🎯 Filter out COMPLETED and CANCELLED (case-insensitive)
+    // 🎯 Case-insensitive filter — exclude COMPLETED & CANCELLED
     const activeOrders = (orders || []).filter(o => {
       const s = String(o.status || '').toUpperCase();
       return s !== 'COMPLETED' && s !== 'CANCELLED';
