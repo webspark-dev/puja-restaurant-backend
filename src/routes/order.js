@@ -18,20 +18,26 @@ try {
 }
 
 // ============================================
-// ⚠️ IMPORTANT: Specific routes BEFORE dynamic routes
+// ⚠️ Specific routes FIRST (before dynamic :orderId)
 // ============================================
 
-// ---- Specific GET routes (আগে থাকতে হবে) ----
-router.get('/customer-history', orderController.getCustomerHistory);
+// 🔑 Customer history — 2 segment route (safe)
+router.get('/customer/history', orderController.getCustomerHistory);
+
+// 🔑 Live orders — 1 segment specific route
 router.get('/live', orderController.getLiveOrders);
 
-// ---- Customer routes ----
+// ---- Create order ----
 router.post('/', orderController.createOrder);
 
-// ---- Dynamic route (একদম শেষে) ----
+// ============================================
+// Dynamic routes LAST
+// ============================================
+
+// Get order by ID
 router.get('/:orderId', orderController.getOrder);
 
-// ---- Admin routes ----
+// Admin: Update status
 router.patch('/:orderId/status', adminAuth, orderController.updateOrderStatus);
 router.patch('/:orderId/settle-cash', adminAuth, orderController.settleCash);
 router.patch('/:orderId/print-bill', adminAuth, orderController.printBill);
