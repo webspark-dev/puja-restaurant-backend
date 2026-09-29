@@ -1,5 +1,5 @@
 // ============================================
-// backend/routes/order.js
+// backend/src/routes/order.js
 // ============================================
 
 const express = require('express');
@@ -17,10 +17,18 @@ try {
   console.warn('adminAuth middleware not found, using passthrough');
 }
 
-// ---- Customer routes ----
-router.post('/', orderController.createOrder);
+// ============================================
+// ⚠️ IMPORTANT: Specific routes BEFORE dynamic routes
+// ============================================
+
+// ---- Specific GET routes (আগে থাকতে হবে) ----
 router.get('/customer-history', orderController.getCustomerHistory);
 router.get('/live', orderController.getLiveOrders);
+
+// ---- Customer routes ----
+router.post('/', orderController.createOrder);
+
+// ---- Dynamic route (একদম শেষে) ----
 router.get('/:orderId', orderController.getOrder);
 
 // ---- Admin routes ----
